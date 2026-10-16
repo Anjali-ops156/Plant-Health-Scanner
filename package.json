@@ -1,0 +1,7 @@
+{
+  "name": "plant-health-scanner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Photograph a plant or leaf, get an AI health check and care tips."
+}

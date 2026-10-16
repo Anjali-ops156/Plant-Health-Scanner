@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plant Health Scanner</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 20px 16px 40px;
+      color: #2f3b2f;
+      background: #f6faf4;
+    }
+    h1 { color: #2E7D32; margin-bottom: 4px; }
+    .subtitle { color: #5B7A5B; margin-top: 0; }
+    .card {
+      background: #fff;
+      border: 1px solid #e2ebe0;
+      border-radius: 10px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+    #preview { width: 100%; border-radius: 8px; display: none; margin-top: 12px; }
+    button {
+      background: #2E7D32;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 20px;
+      font-size: 16px;
+      width: 100%;
+      margin-top: 12px;
+      cursor: pointer;
+    }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    #results { line-height: 1.5; }
+    .error { color: #C0392B; }
+    .muted { color: #888; }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-weight: bold;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    .status-healthy { background: #E3F2E1; color: #2E7D32; }
+    .status-needs-attention { background: #FFF3D6; color: #B7791F; }
+    .status-diseased { background: #FBE2E1; color: #C0392B; }
+    .status-unknown { background: #eee; color: #666; }
+    .meta-row { color: #5B7A5B; font-size: 14px; margin-bottom: 10px; }
+    h4 { margin-bottom: 4px; color: #2E7D32; }
+    ul.issues, ul.tips { margin-top: 4px; padding-left: 20px; }
+    li.severity-mild { color: #B7791F; }
+    li.severity-moderate { color: #D2691E; font-weight: bold; }
+    li.severity-severe { color: #C0392B; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Plant Health Scanner</h1>
+  <p class="subtitle">Take a photo of a plant or leaf. See how it's doing.</p>
+
+  <div class="card">
+    <!-- capture="environment" opens the back camera on phones -->
+    <input type="file" id="photo" accept="image/*" capture="environment" />
+    <img id="preview" alt="Plant photo preview" />
+    <button id="scanBtn" disabled>Scan plant</button>
+  </div>
+
+  <div class="card">
+    <h3>Results</h3>
+    <div id="results" class="muted">Choose a photo and press "Scan plant".</div>
+  </div>
+
+  <script>
+    const photoInput = document.getElementById("photo");
+    const preview = document.getElementById("preview");
+    const scanBtn = document.getElementById("scanBtn");
+    const results = document.getElementById("results");
+
+    let photoDataUrl = null; // the shrunk photo, ready to send
+
+    // When a photo is chosen: shrink it, show a preview, enable the button.
+    photoInput.addEventListener("change", async () => {
+      const file = photoInput.files[0];
+      if (!file) return;
+      photoDataUrl = await shrinkPhoto(file, 1280);
+      preview.src = photoDataUrl;
+      preview.style.display = "block";
+      scanBtn.disabled = false;
+      results.className = "muted";
+      results.textContent = 'Ready. Press "Scan plant".';
+    });
+
+    // Send the photo to our own API (api/scan.js), never straight to Groq.
+    scanBtn.addEventListener("click", async () => {
+      scanBtn.disabled = true;
+      results.className = "muted";
+      results.textContent = "Scanning…";
+
+      try {
+        const response = await fetch("/api/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: photoDataUrl }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          results.className = "error";
+          results.textContent = "Error: " + data.error;
+        } else {
+          results.className = "";
+          renderResults(data);
+        }
+      } catch (err) {
+        results.className = "error";
+        results.textContent = "Could not reach the server: " + err.message;
+      }
+      scanBtn.disabled = false;
+    });
+
+    // Escape text before putting it in HTML, so a model reply can't inject markup.
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text ?? "";
+      return div.innerHTML;
+    }
+
+    // Build the status badge, issues list, and care tips from the API's JSON result.
+    function renderResults(data) {
+      const statusClass = `status-${(data.health_status || "unknown").toLowerCase().replace(/\s+/g, "-")}`;
+      const issues = Array.isArray(data.issues) ? data.issues : [];
+      const tips = Array.isArray(data.care_tips) ? data.care_tips : [];
+
+      let html = `<span class="status-badge ${statusClass}">${escapeHtml(data.health_status || "Unknown")}</span>`;
+      html += `<div class="meta-row">${escapeHtml(data.plant_identified || "Unknown plant")} &middot; confidence: ${escapeHtml(data.confidence || "Low")}</div>`;
+
+      if (issues.length) {
+        const items = issues
+          .map(
+            (issue) =>
+              `<li class="severity-${(issue.severity || "mild").toLowerCase()}">${escapeHtml(issue.name)} (${escapeHtml(issue.severity || "Mild")}) — ${escapeHtml(issue.description || "")}</li>`
+          )
+          .join("");
+        html += `<h4>Issues found</h4><ul class="issues">${items}</ul>`;
+      } else {
+        html += `<p class="muted">No issues detected.</p>`;
+      }
+
+      if (tips.length) {
+        const items = tips.map((tip) => `<li>${escapeHtml(tip)}</li>`).join("");
+        html += `<h4>Care tips</h4><ul class="tips">${items}</ul>`;
+      }
+
+      results.innerHTML = html;
+    }
+
+    // Phone photos are large (5–10 MB). Shrink to at most `maxSize` pixels
+    // on the longest side and save as JPEG, so the upload is small and fast.
+    function shrinkPhoto(file, maxSize) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.8));
+          URL.revokeObjectURL(img.src);
+        };
+        img.onerror = () => reject(new Error("Could not read that photo."));
+        img.src = URL.createObjectURL(file);
+      });
+    }
+  </script>
+</body>
+</html>
